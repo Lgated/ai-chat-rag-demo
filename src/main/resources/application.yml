@@ -1,0 +1,21 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: test-easyjava
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ai_chat
+    username: postgres
+    password: 123456
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update   # 开发阶段自动建表；上线时改为 validate
+    show-sql: true # 启动时，Hibernate 会将执行的 SQL 语句打印到控制台（日志）。
+    properties:
+      hibernate:
+        format_sql: true  # 格式化sql
+        dialect: org.hibernate.dialect.PostgreSQLDialect #  指定PostgreSQL方言
