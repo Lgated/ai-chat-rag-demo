@@ -2,6 +2,7 @@ package com.example.demo.service;
 
 import com.example.demo.domain.Conversation;
 import com.example.demo.domain.Message;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 
@@ -21,4 +22,13 @@ public interface ChatService {
 
     //添加信息
     Message addMessage(Long conversationId, String role, String content);
+
+    //流式ai回复
+    Flux<String> streamAiResponse(Long conversationId, String userMessage);
+
+    //获取指定会话最新的用户消息
+    Message getLatestUserMessage(Long conversationId, String content);
+
+    //获取指定会话最新的AI助手消息
+    Message getLatestAssistantMessage(Long conversationId, String content);
 }

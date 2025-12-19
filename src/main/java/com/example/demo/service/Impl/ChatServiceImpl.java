@@ -9,8 +9,12 @@ import com.example.demo.service.ChatService;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
+import reactor.core.publisher.Flux;
 
+import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -51,7 +55,7 @@ public class ChatServiceImpl implements ChatService {
         return messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
     }
 
-    //根据会话id添加一条消息
+    //非流式问答
     @Override
     public Message addMessage(Long conversationId, String role, String content) {
         Conversation conversation = conversationRepository.findById(conversationId)
@@ -88,4 +92,73 @@ public class ChatServiceImpl implements ChatService {
         }
         return message;
     }
+
+    @Override
+    public Flux<String> streamAiResponse(Long conversationId, String userMessage) {
+        Conversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(()->new IllegalArgumentException("会话不存在" + conversationId));
+
+        Message message = new Message();
+        message.setConversation(conversation);
+        message.setContent(userMessage);
+        message.setRole("user");
+        messageRepository.save(message);
+
+        //获取历史消息
+        List<Message> historyMessages = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversationId);
+
+        String historyText = historyMessages.stream().limit(10)
+                .map(msg -> msg.getRole() + ": " + msg.getContent())
+                .collect(Collectors.joining("\n"));
+
+        // 调用流式 AI
+        StringBuilder fullResponse = new StringBuilder();
+
+        //优点：非阻塞、异步、适配 WebFlux 前端流式返回
+        return aiService.streamResponse(userMessage,historyText)
+                //用于在流的每个元素处理时执行额外逻辑 -  每收到 AI 返回的一段内容chunk，就拼接到 fullResponse 中
+                .doOnNext(chunk -> fullResponse.append(chunk))
+                .doOnComplete(() -> {
+            // 流结束后保存完整的 AI 回答
+            Message assistantMsg = new Message();
+            assistantMsg.setConversation(conversation);
+            assistantMsg.setRole("assistant");
+            assistantMsg.setContent(fullResponse.toString());
+            messageRepository.save(assistantMsg);
+        });
+    }
+
+    // 获取最新的一条用户数据
+    @Override
+    public Message getLatestUserMessage(Long conversationId, String content) {
+        Conversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(()->new IllegalArgumentException("会话不存在" + conversationId));
+
+        List<Message> userMessages  = messageRepository.findByConversationIdAndRoleOrderByCreatedAtAsc(conversationId, "user");
+        // 过滤出内容匹配、按创建时间倒序排序，取第一条
+        Optional<Message> latestMessage = userMessages.stream()
+                .filter(msg -> StringUtils.hasText(msg.getContent())
+                        && msg.getContent().equals(content))
+                .max(Comparator.comparing(Message::getCreatedAt)); // 按创建时间最新排序
+
+        return latestMessage.orElse(null);
+
+    }
+
+
+    @Override
+    public Message getLatestAssistantMessage(Long conversationId, String content) {
+        // 查询该会话下所有AI助手消息
+        List<Message> assistantMessages = messageRepository.findByConversationIdAndRoleOrderByCreatedAtAsc(
+                conversationId, "assistant");
+
+        // 过滤出内容匹配、按创建时间倒序排序，取第一条
+        Optional<Message> latestMessage = assistantMessages.stream()
+                .filter(msg -> StringUtils.hasText(msg.getContent())
+                        && msg.getContent().equals(content))
+                .max(Comparator.comparing(Message::getCreatedAt));
+
+        return latestMessage.orElse(null);
+    }
+
 }

@@ -4,7 +4,10 @@ import com.example.demo.common.Dto.Result;
 import com.example.demo.domain.Conversation;
 import com.example.demo.domain.Message;
 import com.example.demo.service.ChatService;
+import org.springframework.http.MediaType;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 
 import java.util.List;
 import java.util.Map;
@@ -60,7 +63,7 @@ public class ChatController {
     }
 
     /**
-     * 添加一条消息
+     * 添加一条消息 - 非流式子
      */
     @PostMapping("/conversations/{id}/messages")
     public Result<Message> addMessage(@PathVariable Long id, @RequestBody Map<String, String> request) {
@@ -78,5 +81,45 @@ public class ChatController {
 
         Message message = chatService.addMessage(id, role, content);
         return Result.success("添加消息成功",message);
+    }
+
+    /**
+     * produces = MediaType.TEXT_EVENT_STREAM_VALUE ： 告诉前端「这是一个持续的流式响应，不是一次性返回的 JSON」
+     * 通过 SSE 协议向前端实时推送 AI 的流式回答，最后推送流结束标记
+     */
+
+    @GetMapping(value = "/conversations/{id}/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public Flux<ServerSentEvent<String>> streamChat(@PathVariable Long id,@RequestParam String message){
+
+        // 调用 AI 流式生成（需要实现流式版本的 AiService）
+        return chatService.streamAiResponse(id, message)
+                //将 AI 逐段返回的纯文本内容，封装为 SSE 事件对象（前端能识别的格式
+                .map(content -> ServerSentEvent.<String>builder()
+                        .data(content)
+                        .build())
+                //追加一个「流结束标记」的 SSE 事件，告知前端「AI 回答已全部返回」；
+                .concatWith(Flux.just(ServerSentEvent.<String>builder()
+                        .data("[DONE]")  // 流结束标记
+                        .build()));
+    }
+
+    //获取最新用户消息
+    @GetMapping("conversations/{id}/latestUserMessage")
+    public Result<Message> getLatestUserMessage(@PathVariable Long id,@RequestParam String message){
+        Message latestUserMessage = chatService.getLatestUserMessage(id, message);
+        if (latestUserMessage == null) {
+            return Result.error("未找到对应的用户消息");
+        }
+        return Result.success(latestUserMessage);
+    }
+
+    //获取最新ai返回信息
+    @GetMapping("conversations/{id}/latestAssistantMessage")
+    public Result<Message> getLatestAssistantMessage(@PathVariable Long id,@RequestParam String content){
+        Message latestAssistantMessage = chatService.getLatestAssistantMessage(id, content);
+        if (latestAssistantMessage == null) {
+            return Result.error("未找到对应的AI助手消息");
+        }
+        return Result.success(latestAssistantMessage);
     }
 }
