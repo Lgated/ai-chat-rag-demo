@@ -31,4 +31,7 @@ public interface ChatService {
 
     //获取指定会话最新的AI助手消息
     Message getLatestAssistantMessage(Long conversationId, String content);
+
+    //只保存用户消息，不触发AI
+    Message addUserMessageOnly(Long conversationId, String content);
 }

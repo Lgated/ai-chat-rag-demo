@@ -161,4 +161,16 @@ public class ChatServiceImpl implements ChatService {
         return latestMessage.orElse(null);
     }
 
+    @Override
+    public Message addUserMessageOnly(Long conversationId, String content) {
+        Conversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在" + conversationId));
+
+        Message message = new Message();
+        message.setConversation(conversation);
+        message.setRole("user");
+        message.setContent(content);
+
+        return messageRepository.save(message);
+    }
 }
