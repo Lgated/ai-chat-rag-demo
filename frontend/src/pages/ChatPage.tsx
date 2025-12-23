@@ -14,12 +14,15 @@ const ChatPage = () => {
   const [error, setError] = useState<string | null>(null);
   // 新增：对话模式（普通 / RAG / Agent）
   const [chatMode, setChatMode] = useState<'normal' | 'rag' | 'agent'>('normal');
-  //当前流式连接管理
-  const currentEventSourceRef = useRef<EventSource | null>(null);
+  //当前流式连接管理（支持 EventSource 或任何有 close 方法的对象）
+  const currentEventSourceRef = useRef<EventSource | { close: () => void } | null>(null);
   //用于取消过期的请求
   const abortControllerRef = useRef<AbortController | null>(null);
   //用于消息错误
   const [messagesError, setMessagesError] = useState<string | null>(null);
+  //用于消息容器的引用，实现滚动到底部
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
 
   // 加载会话列表
   useEffect(() => {
@@ -61,6 +64,18 @@ const ChatPage = () => {
         setLoadingConversations(false);
       });
   }, []);//只在组件挂载时执行一次
+
+  // 滚动到底部的函数
+  const scrollToBottom = () => {
+    // 使用 setTimeout 确保 DOM 更新后再滚动
+    setTimeout(() => {
+      if (messagesEndRef.current) {
+        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+      } else if (messagesContainerRef.current) {
+        messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+      }
+    }, 100);
+  };
 
   // 加载消息列表 -- 解决竞态条件
   useEffect(() => {
@@ -110,6 +125,8 @@ const ChatPage = () => {
         if (res.code === 200) {
           setMessages(res.data || []);
           setMessagesError(null);
+          // 加载消息后滚动到底部
+          scrollToBottom();
         } else {
           setMessagesError(res.message || '加载消息失败');
           setMessages([]);
@@ -187,40 +204,95 @@ const ChatPage = () => {
 
       // 统一的流式处理函数
       const handleStreamComplete = async () => {
-        // 流结束：获取真实消息ID，替换临时ID
+        // 流结束：重新加载完整消息列表（更可靠）
         try {
           // 检查会话是否仍然是当前会话
           if (currentConversationId !== conversationId) {
-            console.log('会话已切换，跳过替换临时ID');
+            console.log('会话已切换，跳过加载消息');
             setLoading(false);
             return;
           }
 
-          const userRes = await chatApi.getLatestUserMessage(conversationId, userMessage);
-          const assistantRes = await chatApi.getLatestAssistantMessage(conversationId, fullContent);
+          // 等待一小段时间，确保后端已保存消息
+          await new Promise(resolve => setTimeout(resolve, 300));
           
-          const currentTempUserId = tempUserId;
-          const currentTempAssistantId = tempAssistantId;
-
-          // 再次检查会话ID
-          if (currentConversationId === conversationId) {
-            setMessages(prev =>
-              prev.map(msg => {
-                if (msg.id === currentTempUserId) return userRes.data;
-                if (msg.id === currentTempAssistantId) return assistantRes.data;
-                return msg;
-              })
-            );
+          // 重新加载消息列表
+          const messagesRes = await chatApi.getMessages(conversationId);
+          if (messagesRes.code === 200 && currentConversationId === conversationId) {
+            setMessages(messagesRes.data);
+            scrollToBottom();
           }
         } catch (e) {
-          console.warn('替换临时消息ID失败，不影响显示:', e);
+          console.warn('重新加载消息失败:', e);
+          // 如果重新加载失败，尝试通过内容匹配查找（备用方案）
+          try {
+            const userRes = await chatApi.getLatestUserMessage(conversationId, userMessage);
+            const assistantRes = await chatApi.getLatestAssistantMessage(conversationId, fullContent);
+            
+            if (userRes.code === 200 && assistantRes.code === 200 && currentConversationId === conversationId) {
+              setMessages(prev =>
+                prev.map(msg => {
+                  if (msg.id === tempUserId) return userRes.data;
+                  if (msg.id === tempAssistantId) return assistantRes.data;
+                  return msg;
+                })
+              );
+              scrollToBottom();
+            }
+          } catch (e2) {
+            console.warn('替换临时消息ID也失败:', e2);
+          }
         } finally {
           setLoading(false);
         }
       };
 
+      // 流式输出缓冲和节流机制
+      let chunkBuffer = '';
+      let rafId: number | null = null;
+      
+      const flushBuffer = () => {
+        if (chunkBuffer && currentConversationId === conversationId) {
+          fullContent += chunkBuffer;
+          const contentToUpdate = fullContent;
+          setMessages(prev =>
+            prev.map(msg =>
+              msg.id === tempAssistantId
+                ? { ...msg, content: contentToUpdate }
+                : msg
+            )
+          );
+          chunkBuffer = '';
+          scrollToBottom();
+        }
+        rafId = null;
+      };
+      
+      const scheduleUpdate = (chunk: string) => {
+        if (currentConversationId !== conversationId) {
+          return; // 会话已切换，忽略
+        }
+        
+        chunkBuffer += chunk;
+        // 如果buffer达到一定大小（20个字符），立即更新
+        if (chunkBuffer.length >= 20) {
+          if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          flushBuffer();
+        } else {
+          // 否则使用requestAnimationFrame节流更新（约16ms一次，最多60fps）
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
+              flushBuffer();
+            });
+          }
+        }
+      };
+
       // 根据模式选择不同的流式接口
-      let eventSource: EventSource | null = null;
+      let eventSource: EventSource | { close: () => void } | null = null;
 
       if (chatMode === 'rag') {
         // RAG 流式对话
@@ -230,17 +302,17 @@ const ChatPage = () => {
           (chunk) => {
             // 检查是否还是当前会话
             if (currentConversationId === conversationId) {
-              fullContent += chunk;
-              setMessages(prev =>
-                prev.map(msg =>
-                  msg.id === tempAssistantId
-                    ? { ...msg, content: fullContent }
-                    : msg
-                )
-              );
+              scheduleUpdate(chunk);
             }
           },
-          handleStreamComplete
+          () => {
+            // 流结束时，确保所有缓冲的数据都被更新
+            if (rafId) {
+              cancelAnimationFrame(rafId);
+            }
+            flushBuffer();
+            handleStreamComplete();
+          }
         );
       } else if (chatMode === 'agent') {
         // Agent 流式对话
@@ -249,17 +321,17 @@ const ChatPage = () => {
           userMessage,
           (chunk) => {
             if (currentConversationId === conversationId) {
-              fullContent += chunk;
-              setMessages(prev =>
-                prev.map(msg =>
-                  msg.id === tempAssistantId
-                    ? { ...msg, content: fullContent }
-                    : msg
-                )
-              );
+              scheduleUpdate(chunk);
             }
           },
-          handleStreamComplete
+          () => {
+            // 流结束时，确保所有缓冲的数据都被更新
+            if (rafId) {
+              cancelAnimationFrame(rafId);
+            }
+            flushBuffer();
+            handleStreamComplete();
+          }
         );
       } else {
         // 普通流式对话
@@ -268,17 +340,17 @@ const ChatPage = () => {
           userMessage,
           (chunk) => {
             if (currentConversationId === conversationId) {
-              fullContent += chunk;
-              setMessages(prev =>
-                prev.map(msg =>
-                  msg.id === tempAssistantId
-                    ? { ...msg, content: fullContent }
-                    : msg
-                )
-              );
+              scheduleUpdate(chunk);
             }
           },
-          handleStreamComplete
+          () => {
+            // 流结束时，确保所有缓冲的数据都被更新
+            if (rafId) {
+              cancelAnimationFrame(rafId);
+            }
+            flushBuffer();
+            handleStreamComplete();
+          }
         );
         return; // 普通模式不需要保存 EventSource
       }
@@ -387,7 +459,7 @@ const ChatPage = () => {
           </div>
         )}
 
-        <div className="messages-container">
+        <div className="messages-container" ref={messagesContainerRef}>
           {(messages || [])
             .filter((msg): msg is Message => !!msg && !!msg.role)
             .map((msg) => (
@@ -396,6 +468,7 @@ const ChatPage = () => {
             </div>
           ))}
           {loading && <div className="message assistant">思考中...</div>}
+          <div ref={messagesEndRef} />
         </div>
 
         <div className="input-container">

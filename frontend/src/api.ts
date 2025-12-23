@@ -96,27 +96,138 @@ export const chatApi = {
       onChunk: (chunk: string) => void,
       onComplete: () => void
     ) => {
-      const eventSource = new EventSourcePolyfill(
-        `http://localhost:8080/api/chat/conversations/${conversationId}/rag-stream`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message }) }
-      );
-
-      eventSource.onmessage = (event) => {
-        if (event.data === '[DONE]') {
-          eventSource.close();
+      // 使用 fetch + ReadableStream 实现 POST SSE
+      let abortController: AbortController | null = new AbortController();
+      
+      fetch(`http://localhost:8080/api/chat/conversations/${conversationId}/rag-stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ message }),
+        signal: abortController.signal,
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        
+        if (!reader) {
           onComplete();
-        } else {
-          onChunk(event.data);
+          return;
+        }
+        
+        const readStream = () => {
+          reader.read().then(({ done, value }) => {
+            if (done) {
+              // 处理剩余的 buffer
+              if (buffer.trim()) {
+                processBuffer();
+              }
+              onComplete();
+              return;
+            }
+            
+            // 立即解码并添加到buffer
+            if (value) {
+              buffer += decoder.decode(value, { stream: true });
+            }
+            
+            // SSE 格式：每个事件以 \n\n 结束
+            // 立即处理所有完整的事件（不等待，不缓冲）
+            let eventEndIndex;
+            while ((eventEndIndex = buffer.indexOf('\n\n')) !== -1) {
+              const eventText = buffer.substring(0, eventEndIndex);
+              buffer = buffer.substring(eventEndIndex + 2);
+              
+              // 立即处理这个事件（同步处理，不延迟）
+              processEvent(eventText);
+            }
+            
+            // 继续读取下一个数据块（递归调用，不等待）
+            readStream();
+          }).catch(err => {
+            console.error('读取流失败:', err);
+            onComplete();
+          });
+        };
+        
+        // 处理单个 SSE 事件（模拟原生 EventSource 的行为）
+        const processEvent = (eventText: string) => {
+          // 查找 data: 行（支持多行 data:，Spring 会在内容包含换行时自动格式化为多行）
+          const lines = eventText.split(/\r?\n/);
+          const dataParts: string[] = [];
+          
+          for (const line of lines) {
+            // 只处理以 "data: " 开头的行
+            if (line.startsWith('data: ')) {
+              const data = line.substring(6); // 提取 data: 后面的内容
+              
+              // 检查是否是结束标记
+              if (data === '[DONE]' || data.trim() === '[DONE]') {
+                onComplete();
+                return;
+              }
+              
+              // 收集数据（保留原始内容，包括空字符串）
+              dataParts.push(data);
+            }
+            // 忽略其他行（空行、event:、id: 等 SSE 协议字段）
+          }
+          
+          // 如果有数据，合并并立即发送（多行 data: 用换行符连接）
+          // 注意：即使 dataParts 只有一个元素，也要发送
+          if (dataParts.length > 0) {
+            const mergedData = dataParts.join('\n');
+            // 立即调用 onChunk，不延迟
+            onChunk(mergedData);
+          }
+        };
+        
+        // 处理剩余的 buffer（流结束时）
+        const processBuffer = () => {
+          const lines = buffer.split(/\r?\n/);
+          const dataParts: string[] = [];
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.substring(6);
+              if (data === '[DONE]' || data.trim() === '[DONE]') {
+                return;
+              }
+              dataParts.push(data);
+            }
+          }
+          
+          // 合并并发送（多行 data: 用换行符连接）
+          if (dataParts.length > 0) {
+            const mergedData = dataParts.join('\n');
+            onChunk(mergedData);
+          }
+        };
+        
+        readStream();
+      })
+      .catch(err => {
+        if (err.name !== 'AbortError') {
+          console.error('请求失败:', err);
+        }
+        onComplete();
+      });
+      
+      // 返回一个可以关闭的对象
+      return {
+        close: () => {
+          if (abortController) {
+            abortController.abort();
+            abortController = null;
+          }
         }
       };
-
-      eventSource.onerror = () => {
-        eventSource.close();
-        onComplete();
-      };
-
-      return eventSource; // 返回 EventSource，方便关闭
     },
     // Agent 流式对话
     agentStreamChat: (

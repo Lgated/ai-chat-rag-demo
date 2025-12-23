@@ -13,6 +13,7 @@ import com.example.demo.service.RagService;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -52,11 +53,18 @@ public class RagServiceImpl implements RagService {
         List<float[]> embeddings = embeddingService.embedTexts(chunks);
         //3、存入数据库
         for (int i = 0; i < chunks.size(); i++) {
-            DocumentChunk chunk = new DocumentChunk();
+           /* DocumentChunk chunk = new DocumentChunk();
             chunk.setDocId(docId);
             chunk.setContent(chunks.get(i));
             chunk.setEmbedding(embeddingService.toVectorString(embeddings.get(i)));
-            documentRepository.save(chunk);
+            documentRepository.save(chunk);*/
+            String embeddingStr = embeddingService.toVectorString(embeddings.get(i));
+            documentRepository.insertWithVector(
+                    chunks.get(i),
+                    docId,
+                    embeddingStr,
+                    LocalDateTime.now()
+            );
         }
     }
 
@@ -69,6 +77,19 @@ public class RagServiceImpl implements RagService {
         String queryVector = embeddingService.toVectorString(queryEmbedding);
         //2、 向量相似度检查
         List<DocumentChunk> similarChunks = documentRepository.findSimilarChunks(queryVector, topK);
+        
+        // 添加日志：调试检索结果
+        System.out.println("RAG检索 - 查询问题: " + query);
+        System.out.println("RAG检索 - 找到 " + similarChunks.size() + " 个相关文档片段");
+        if (similarChunks.isEmpty()) {
+            System.out.println("警告：未找到相关文档片段，请检查文档是否已入库");
+        } else {
+            for (int i = 0; i < similarChunks.size(); i++) {
+                System.out.println("片段 " + (i + 1) + " (前100字): " + 
+                    similarChunks.get(i).getContent().substring(0, Math.min(100, similarChunks.get(i).getContent().length())));
+            }
+        }
+
         //3、返回内容
         return similarChunks.stream()
                 .map(DocumentChunk::getContent)
@@ -93,38 +114,58 @@ public class RagServiceImpl implements RagService {
 
     @Override
     public Flux<String> streamRagResponse(Long conversationId, String query, int topK) {
-        // 1. RAG 检索：找到相关文档片段
+        // 1. 先保存用户消息
+        Conversation conversation = conversationRepository.findById(conversationId)
+                .orElseThrow(() -> new IllegalArgumentException("会话不存在: " + conversationId));
+        
+        Message userMsg = new Message();
+        userMsg.setConversation(conversation);
+        userMsg.setRole("user");
+        userMsg.setContent(query);
+        messageRepository.save(userMsg);
+        
+        // 2. RAG 检索：找到相关文档片段
         List<String> relevantChunks = retrieveRelevantChunks(query, topK);
 
-        // 2. 获取历史消息（用于上下文）
+        // 3. 获取历史消息（用于上下文，包括刚刚保存的用户消息）
         List<Message> historyMessages = messageRepository
                 .findByConversationIdOrderByCreatedAtAsc(conversationId);
         String historyText = historyMessages.stream().limit(10)
                 .map(msg -> msg.getRole() + ": " + msg.getContent())
                 .collect(Collectors.joining("\n"));
 
-        // 3. 构建包含文档片段的上下文
+        // 4. 构建包含文档片段的上下文
         StringBuilder context = new StringBuilder();
-        if (!historyText.isEmpty()) {
+        if (historyText != null && !historyText.isEmpty()) {
             context.append("以下是对话历史：\n").append(historyText).append("\n\n");
         }
-        context.append("以下是与问题相关的文档片段：\n\n");
-        for (int i = 0; i < relevantChunks.size(); i++) {
-            context.append("片段 ").append(i + 1).append(":\n");
-            context.append(relevantChunks.get(i)).append("\n\n");
+        
+        // 添加日志：调试检索结果
+        System.out.println("RAG流式 - 检索到 " + relevantChunks.size() + " 个文档片段");
+        
+        if (relevantChunks.isEmpty()) {
+            // 如果没有检索到文档，提示用户
+            context.append("注意：未在知识库中找到相关文档片段。\n\n");
+            context.append("请基于你的知识回答问题：").append(query);
+        } else {
+            context.append("以下是与问题相关的文档片段：\n\n");
+            for (int i = 0; i < relevantChunks.size(); i++) {
+                context.append("片段 ").append(i + 1).append(":\n");
+                context.append(relevantChunks.get(i)).append("\n\n");
+            }
+            context.append("请基于以上文档内容回答问题：").append(query);
         }
-        context.append("请基于以上文档内容回答问题：").append(query);
 
-        // 4. 流式生成回答
+        // 5. 流式生成回答
         StringBuilder fullResponse = new StringBuilder();
-        return aiService.streamResponse(query,context.toString())
+        return aiService.streamResponse(query, context.toString())
                 .doOnNext(chunk -> fullResponse.append(chunk))
                 .doOnComplete(() -> {
                     // 流结束后保存完整的 AI 回答
-                    Conversation conversation = conversationRepository.findById(conversationId)
+                    Conversation conversations = conversationRepository.findById(conversationId)
                             .orElseThrow(() -> new IllegalArgumentException("会话不存在"));
                     Message assistantMsg = new Message();
-                    assistantMsg.setConversation(conversation);
+                    assistantMsg.setConversation(conversations);
                     assistantMsg.setRole("assistant");
                     assistantMsg.setContent(fullResponse.toString());
                     messageRepository.save(assistantMsg);
