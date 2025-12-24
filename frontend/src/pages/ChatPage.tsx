@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Conversation, Message } from '../api';
 import { chatApi, streamMessage } from '../api';
+import DocumentPage from './DocumentPage';
 import './ChatPage.css';
 
 const ChatPage = () => {
@@ -14,6 +15,8 @@ const ChatPage = () => {
   const [error, setError] = useState<string | null>(null);
   // 新增：对话模式（普通 / RAG / Agent）
   const [chatMode, setChatMode] = useState<'normal' | 'rag' | 'agent'>('normal');
+  // 新增：页面切换（聊天 / 文档）
+  const [currentPage, setCurrentPage] = useState<'chat' | 'document'>('chat');
   //当前流式连接管理（支持 EventSource 或任何有 close 方法的对象）
   const currentEventSourceRef = useRef<EventSource | { close: () => void } | null>(null);
   //用于取消过期的请求
@@ -386,8 +389,30 @@ const ChatPage = () => {
 
   return (
     <div className="chat-container">
-      {/* 左侧：会话列表 */}
-      <div className="sidebar">
+      {/* 顶部标签页切换 */}
+      <div className="page-tabs">
+        <button
+          className={`page-tab ${currentPage === 'chat' ? 'active' : ''}`}
+          onClick={() => setCurrentPage('chat')}
+        >
+          💬 对话
+        </button>
+        <button
+          className={`page-tab ${currentPage === 'document' ? 'active' : ''}`}
+          onClick={() => setCurrentPage('document')}
+        >
+          📚 文档管理
+        </button>
+      </div>
+
+      {currentPage === 'document' ? (
+        <div className="document-page-wrapper">
+          <DocumentPage />
+        </div>
+      ) : (
+        <div className="chat-content-wrapper">
+          {/* 左侧：会话列表 */}
+          <div className="sidebar">
         <button className="new-chat-btn" onClick={handleNewConversation}>
           + 新会话
         </button>
@@ -488,6 +513,8 @@ const ChatPage = () => {
           </button>
         </div>
       </div>
+        </div>
+      )}
     </div>
   );
 };

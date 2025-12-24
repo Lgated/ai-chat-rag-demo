@@ -13,12 +13,12 @@
             "state": {
               "type": "markdown",
               "state": {
-                "file": "单元测试和功能实现计划.md",
+                "file": "完整代码实现.md",
                 "mode": "source",
                 "source": false
               },
               "icon": "lucide-file",
-              "title": "单元测试和功能实现计划"
+              "title": "完整代码实现"
             }
           }
         ]
@@ -185,7 +185,16 @@
   },
   "active": "8f8212e7550e00e4",
   "lastOpenFiles": [
+    "文档上传和引用功能实现方案.md",
+    "完整代码实现.md",
+    "AI异常处理和API配置指南.md",
+    "FilePart适配器实现方案.md",
+    "RAG引用信息返回方案.md",
+    "项目架构说明.md",
+    "单元测试和功能实现计划.md",
+    "配置.md",
     "前端开发从零开始学习指南.md",
-    "单元测试和功能实现计划.md"
+    "通义千问DashScope配置步骤.md",
+    "Git和GitHub使用指南.md"
   ]
 }

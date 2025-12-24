@@ -1,7 +1,51 @@
 .chat-container {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+/* 聊天内容包装器（侧边栏 + 主内容区域） */
+.chat-content-wrapper {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* 文档页面包装器 */
+.document-page-wrapper {
+  flex: 1;
+  overflow: auto;
+}
+
+/* 页面标签页 */
+.page-tabs {
+  display: flex;
+  background-color: #f5f5f5;
+  border-bottom: 1px solid #e0e0e0;
+  padding: 0 20px;
+}
+
+.page-tab {
+  padding: 12px 24px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 14px;
+  color: #666;
+  transition: all 0.2s;
+}
+
+.page-tab:hover {
+  background-color: #e8e8e8;
+  color: #333;
+}
+
+.page-tab.active {
+  color: #007bff;
+  border-bottom-color: #007bff;
+  font-weight: bold;
 }
 
 /* 左侧边栏 */
@@ -11,6 +55,7 @@
   border-right: 1px solid #e0e0e0;
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
 }
 
 .new-chat-btn {
@@ -55,6 +100,7 @@
   display: flex;
   flex-direction: column;
   background-color: white;
+  overflow: hidden;
 }
 
 .messages-container {

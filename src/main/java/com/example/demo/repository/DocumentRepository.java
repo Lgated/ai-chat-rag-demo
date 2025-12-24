@@ -5,11 +5,13 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
+@Repository
 public interface DocumentRepository extends JpaRepository<DocumentChunk,Long> {
     // 使用 pgvector 的相似度查询
     // 按向量距离升序取出与给定向量最相似的前 N 条记录
@@ -39,4 +41,9 @@ public interface DocumentRepository extends JpaRepository<DocumentChunk,Long> {
                           @Param("embedding") String embedding,
                           @Param("createdAt") LocalDateTime createdAt);
 
+
+    @Modifying
+    @Query("DELETE FROM DocumentChunk WHERE docId = :docId")
+    @Transactional
+    void deleteByDocId(@Param("docId") Long docId);
 }
